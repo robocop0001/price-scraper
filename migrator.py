@@ -32,8 +32,8 @@ def add_item(conn, item):
     '''
 
     sql =   """
-            INSERT INTO item(store,name,unitCost,weightKg)
-            VALUES(?,?,?,?)
+            INSERT INTO item(store,name,alias,unitCost,weightKg)
+            VALUES(?,?,?,?,?)
             """
     cursor = conn.cursor()
 
