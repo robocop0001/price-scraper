@@ -102,6 +102,30 @@ class StoreParserTests(unittest.TestCase):
         self.assertEqual(records[0]['item_price'], 4.50)
         self.assertEqual(records[0]['item_weight_kg'], 3.0)
 
+    def test_cosine_similarity_normalises_product_units(self):
+        self.assertEqual(
+            scraper.cosine_similarity('full cream milk 3 litres', 'Full Cream Milk 3L'),
+            1.0,
+        )
+        self.assertEqual(scraper.cosine_similarity('milk', 'cucumber'), 0.0)
+
+    def test_parser_returns_only_the_top_two_ranked_matches(self):
+        records = scraper.ColesStore().process_request(
+            {
+                'results': [
+                    {'product_name': 'Chocolate Milk 2L', 'current_price': '$3.00', 'product_size': '2L'},
+                    {'product_name': 'Full Cream Milk 3L', 'current_price': '$4.50', 'product_size': '3L'},
+                    {'product_name': 'Cucumber 1kg', 'current_price': '$2.00', 'product_size': '1kg'},
+                ]
+            },
+            alias='full cream milk 3 litres',
+        )
+
+        self.assertEqual([record['item_name'] for record in records], ['Full Cream Milk 3L', 'Chocolate Milk 2L'])
+        self.assertEqual([record['similarity_rank'] for record in records], [1, 2])
+        self.assertEqual(records[0]['similarity_score'], 1.0)
+        self.assertGreater(records[1]['similarity_score'], 0.0)
+
 
 if __name__ == '__main__':
     unittest.main()

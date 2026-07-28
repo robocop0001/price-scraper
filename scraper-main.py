@@ -1,7 +1,9 @@
 import csv
 import json
+import math
 import os
 import re
+from collections import Counter
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -13,7 +15,11 @@ from dotenv import load_dotenv
 PROJECT_DIR = Path(__file__).resolve().parent
 PRODUCTS_FILE = PROJECT_DIR / 'products.json'
 CSV_FILE = PROJECT_DIR / 'data.csv'
-CSV_COLUMNS = ['store', 'item_name', 'item_price', 'item_weight_kg', 'alias', 'date']
+CSV_COLUMNS = [
+    'store', 'item_name', 'item_price', 'item_weight_kg', 'alias',
+    'similarity_score', 'similarity_rank', 'date',
+]
+TOP_MATCHES_PER_STORE = 2
 
 # Explicitly locating .env is important when this module is imported by tests or
 # launched from a directory other than the project directory.
@@ -41,6 +47,31 @@ def preview(value, limit: int = 240) -> str:
     """Keep diagnostics useful when an API field contains a large HTML blob."""
     text = repr(value).replace('\n', ' ')
     return text if len(text) <= limit else f'{text[:limit - 3]}...'
+
+
+def _bag_of_words(text: str) -> Counter:
+    """Create a lightly normalised term-frequency vector for product names."""
+    normalised = str(text).lower()
+    normalised = re.sub(r'(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)', ' ', normalised)
+    normalised = normalised.replace('×', ' x ')
+    tokens = re.findall(r'[a-z0-9]+', normalised)
+    unit_aliases = {
+        'litre': 'l', 'litres': 'l', 'liter': 'l', 'liters': 'l',
+        'kilogram': 'kg', 'kilograms': 'kg', 'grams': 'g', 'millilitres': 'ml', 'milliliters': 'ml',
+    }
+    return Counter(unit_aliases.get(token, token) for token in tokens)
+
+
+def cosine_similarity(left: str, right: str) -> float:
+    """Return bag-of-words cosine similarity in the inclusive range 0.0–1.0."""
+    left_vector = _bag_of_words(left)
+    right_vector = _bag_of_words(right)
+    if not left_vector or not right_vector:
+        return 0.0
+    dot_product = sum(count * right_vector[token] for token, count in left_vector.items())
+    left_magnitude = math.sqrt(sum(count ** 2 for count in left_vector.values()))
+    right_magnitude = math.sqrt(sum(count ** 2 for count in right_vector.values()))
+    return round(dot_product / (left_magnitude * right_magnitude), 4)
 
 
 class BaseStore:
@@ -131,13 +162,15 @@ class BaseStore:
         return None, None
 
     @staticmethod
-    def _normalise_record(store_name, item_name, item_price, item_weight_kg, alias):
+    def _normalise_record(store_name, item_name, item_price, item_weight_kg, alias, similarity_score):
         return {
             'store': store_name,
             'item_name': item_name,
             'item_price': item_price,
             'item_weight_kg': item_weight_kg,
             'alias': alias,
+            'similarity_score': similarity_score,
+            'similarity_rank': None,
             'date': date.today().isoformat(),
         }
 
@@ -180,12 +213,20 @@ class BaseStore:
                     f'{self.store_name}: first product keys={list(item)[:20]}; '
                     f'price_source={preview(raw_price)}; weight_source={preview(raw_weight)}.'
                 )
-            records.append(self._normalise_record(self.store_name, name, price, weight, alias))
+            similarity_score = cosine_similarity(alias, name)
+            records.append(self._normalise_record(
+                self.store_name, name, price, weight, alias, similarity_score,
+            ))
+        records.sort(key=lambda record: (-record['similarity_score'], record['item_name'].lower()))
+        selected_records = records[:TOP_MATCHES_PER_STORE]
+        for rank, record in enumerate(selected_records, start=1):
+            record['similarity_rank'] = rank
         debug(
-            f'{self.store_name}: parsed {len(records)} records for {alias!r}; '
-            f'missing price={missing_price}, missing weight={missing_weight}, invalid products={invalid_products}.'
+            f'{self.store_name}: selected {len(selected_records)} of {len(records)} candidates for {alias!r}; '
+            f'missing price={missing_price}, missing weight={missing_weight}, invalid products={invalid_products}; '
+            f'matches={[(record["item_name"], record["similarity_score"]) for record in selected_records]}.'
         )
-        return records
+        return selected_records
 
     def write_csv(self, rows):
         with CSV_FILE.open('w', newline='', encoding='utf-8') as file:
