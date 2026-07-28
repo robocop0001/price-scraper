@@ -162,14 +162,13 @@ class BaseStore:
         return None, None
 
     @staticmethod
-    def _normalise_record(store_name, item_name, item_price, item_weight_kg, alias, similarity_score):
+    def _normalise_record(store_name, item_name, item_price, item_weight_kg, alias):
         return {
             'store': store_name,
             'item_name': item_name,
             'item_price': item_price,
             'item_weight_kg': item_weight_kg,
             'alias': alias,
-            'similarity_score': similarity_score,
             'similarity_rank': None,
             'date': date.today().isoformat(),
         }
@@ -215,7 +214,7 @@ class BaseStore:
                 )
             similarity_score = cosine_similarity(alias, name)
             records.append(self._normalise_record(
-                self.store_name, name, price, weight, alias, similarity_score,
+                self.store_name, name, price, weight, alias,
             ))
         records.sort(key=lambda record: (-record['similarity_score'], record['item_name'].lower()))
         selected_records = records[:TOP_MATCHES_PER_STORE]
